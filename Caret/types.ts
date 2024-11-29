@@ -149,4 +149,5 @@ export interface CaretPluginSettings {
     llm_provider_options: LLMProviderOptions;
     provider_dropdown_options: { [key: string]: string };
     include_nested_block_refs: boolean;
+    ollama_models: string[];  // Add this line for Ollama models
 }

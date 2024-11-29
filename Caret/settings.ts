@@ -100,55 +100,61 @@ export class CaretSettingTab extends PluginSettingTab {
                     .setValue(this.plugin.settings.llm_provider)
                     .onChange(async (provider) => {
                         this.plugin.settings.llm_provider = provider;
-                        this.plugin.settings.model = Object.keys(
-                            this.plugin.settings.llm_provider_options[provider]
-                        )[0];
+                        if (provider === "ollama") {
+                            // Fetch Ollama models when switching to Ollama provider
+                            await this.plugin.updateOllamaModels();
+                            // Set the first available Ollama model as default
+                            this.plugin.settings.model = this.plugin.settings.ollama_models[0] || "mistral";
+                        } else {
+                            this.plugin.settings.model = Object.keys(
+                                this.plugin.settings.llm_provider_options[provider]
+                            )[0];
+                        }
                         this.plugin.settings.context_window =
                             this.plugin.settings.llm_provider_options[provider][
                                 this.plugin.settings.model
-                            ].context_window;
+                            ]?.context_window || 128000;
                         await this.plugin.saveSettings();
                         await this.plugin.loadSettings();
                         this.display();
                     });
             });
-        const setting = new Setting(containerEl).setName("Model").addExtraButton(button => {
+
+        const setting = new Setting(containerEl).setName("Model").addDropdown(async (modelDropdown) => {
             if (this.plugin.settings.llm_provider === "ollama") {
-                button
-                    .setIcon("refresh-ccw")
-                    .setTooltip("Refresh Ollama Models")
-                    .onClick(async () => {
-                        try {
-                            new Notice("Checking Ollama connection...");
-                            await this.plugin.updateOllamaModels();
-                            this.display();
-                        } catch (error) {
-                            console.error("Failed to refresh Ollama models:", error);
-                            
-                            // Show a more detailed error message
-                            const errorMessage = error.message.includes("Could not connect to Ollama")
-                                ? "Could not connect to Ollama. Please make sure:\n1. Ollama is running\n2. CORS is enabled with:\nOLLAMA_ORIGINS=app://obsidian.md* ollama serve"
-                                : error.message.includes("No Ollama models found")
-                                ? "No Ollama models found. Install models using:\nollama pull mistral"
-                                : `Error: ${error.message}`;
-                            
-                            new Notice(errorMessage, 10000);
-                        }
-                    });
+                // For Ollama, use the dynamic model list
+                const models = this.plugin.settings.ollama_models;
+                const modelOptions = Object.fromEntries(models.map(model => [model, model]));
+                modelDropdown.addOptions(modelOptions);
+            } else {
+                modelDropdown.addOptions(model_options_data);
             }
-        });
-        setting.addDropdown((modelDropdown) => {
-            modelDropdown.addOptions(model_options_data);
             modelDropdown.setValue(this.plugin.settings.model);
             modelDropdown.onChange(async (value) => {
                 this.plugin.settings.model = value;
-                this.plugin.settings.context_window =
-                    this.plugin.settings.llm_provider_options[this.plugin.settings.llm_provider][value].context_window;
+                if (this.plugin.settings.llm_provider !== "ollama") {
+                    this.plugin.settings.context_window =
+                        this.plugin.settings.llm_provider_options[this.plugin.settings.llm_provider][value]?.context_window || 128000;
+                }
                 await this.plugin.saveSettings();
                 await this.plugin.loadSettings();
                 this.display();
             });
         });
+
+        if (this.plugin.settings.llm_provider === "ollama") {
+            // Add refresh button for Ollama models
+            setting.addExtraButton((button) => {
+                button
+                    .setIcon("refresh-cw")
+                    .setTooltip("Refresh Ollama models")
+                    .onClick(async () => {
+                        await this.plugin.updateOllamaModels();
+                        this.display();
+                    });
+            });
+        }
+
         if (this.plugin.settings.model === "gpt-4o") {
             new Setting(containerEl)
                 .setName("GPT-4o")
@@ -354,8 +360,33 @@ export class CaretSettingTab extends PluginSettingTab {
     display(): void {
         const { containerEl } = this;
         containerEl.empty();
-        if (this.plugin.settings.caret_version !== DEFAULT_SETTINGS.caret_version) {
-            this.plugin.settings.caret_version = DEFAULT_SETTINGS.caret_version;
+        containerEl.createEl("h2", { text: "Caret Settings" });
+
+        if (this.plugin.settings.llm_provider === "ollama") {
+            new Setting(containerEl)
+                .setName("Model")
+                .setDesc("Select which Ollama model to use")
+                .addDropdown(async (dropdown) => {
+                    // Add available models to dropdown
+                    const models = this.plugin.settings.ollama_models || [];
+                    models.forEach((model) => {
+                        dropdown.addOption(model, model);
+                    });
+                    dropdown.setValue(this.plugin.settings.model);
+                    dropdown.onChange(async (value) => {
+                        this.plugin.settings.model = value;
+                        await this.plugin.saveSettings();
+                    });
+                })
+                .addExtraButton((button) => {
+                    button
+                        .setIcon("refresh-cw")
+                        .setTooltip("Refresh Ollama models")
+                        .onClick(async () => {
+                            await this.plugin.updateOllamaModels();
+                            this.display();  // Refresh the settings UI
+                        });
+                });
         }
 
         const tabContainer = containerEl.createEl("div", { cls: "caret-tab-container" });
