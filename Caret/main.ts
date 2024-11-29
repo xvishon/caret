@@ -253,69 +253,15 @@ export const DEFAULT_SETTINGS: CaretPluginSettings = {
             },
         },
         ollama: {
-            "llama3.1": {
-                name: "llama3.1 8B",
-                context_window: 131072,
-                function_calling: false,
-                vision: false,
-                streaming: true,
-            },
-            llama3: {
-                name: "llama3 8B",
-                context_window: 8192,
-                function_calling: false,
-                vision: false,
-                streaming: true,
-            },
-            "llama3.2:1b": {
-                name: "llama3.2 1B",
-                context_window: 131072,
-                function_calling: false,
-                vision: false,
-                streaming: true,
-            },
-            "llama3.2:3b": {
-                name: "llama3.2 3B",
-                context_window: 131072,
-                function_calling: false,
-                vision: false,
-                streaming: true,
-            },
-            phi3: {
-                name: "Phi-3 3.8B",
-                context_window: 8192,
-                function_calling: false,
-                vision: false,
-                streaming: true,
-            },
-            mistral: {
-                name: "Mistral 7B",
-                context_window: 32768,
-                function_calling: false,
-                vision: false,
-                streaming: true,
-            },
-            gemma: {
-                name: "Gemma 7B",
-                context_window: 8192,
-                function_calling: false,
-                vision: false,
-                streaming: true,
-            },
-            gemma2: {
-                name: "Gemma 2",
-                context_window: 8192,
-                function_calling: false,
-                vision: false,
-                streaming: true,
-            },
+            name: "Ollama",
+            models: [] // This will be dynamically populated
         },
         custom: {},
     },
     provider_dropdown_options: {
         openai: "OpenAI",
         groq: "Groq",
-        ollama: "Ollama",
+        ollama: "Ollama",  // Change from object to string
         anthropic: "Anthropic",
         openrouter: "OpenRouter",
         custom: "Custom",
@@ -423,7 +369,7 @@ export default class CaretPlugin extends Plugin {
         this.addCommand({
             id: "create-linear-workflow",
             name: "Create linear workflow from canvas",
-            checkCallback: (checking: boolean) => {
+            checkCallback: async (checking: boolean) => {
                 const canvas_view = this.app.workspace.getMostRecentLeaf()?.view;
                 let on_canvas = false;
 
@@ -617,7 +563,7 @@ version: 1
         this.addCommand({
             id: "canvas-prompt",
             name: "Canvas prompt",
-            checkCallback: (checking: boolean) => {
+            checkCallback: async (checking: boolean) => {
                 const canvas_view = this.app.workspace.getMostRecentLeaf()?.view;
                 let on_canvas = false;
                 // @ts-ignore
@@ -627,139 +573,138 @@ version: 1
                 // @ts-ignore TODO: Type this better
                 if (on_canvas) {
                     if (!checking) {
-                        (async () => {
-                            // @ts-ignore
-                            const canvas = canvas_view.canvas;
-                            const selection = canvas.selection;
+                        // @ts-ignore
+                        const canvas = canvas_view.canvas;
 
-                            let average_x = 0;
-                            let average_y = 0;
-                            let average_height = 0;
-                            let average_width = 0;
+                        const selection = canvas.selection;
 
-                            let total_x = 0;
-                            let total_y = 0;
-                            let count = 0;
-                            let total_height = 0;
-                            let total_width = 0;
-                            let all_text = "";
+                        let average_x = 0;
+                        let average_y = 0;
+                        let average_height = 0;
+                        let average_width = 0;
 
-                            let convo_total_tokens = 0;
+                        let total_x = 0;
+                        let total_y = 0;
+                        let count = 0;
+                        let total_height = 0;
+                        let total_width = 0;
+                        let all_text = ``;
 
-                            const context_window = this.settings.context_window;
+                        let convo_total_tokens = 0;
 
-                            for (const obj of selection) {
-                                const { x, y, height, width } = obj;
-                                total_x += x;
-                                total_y += y;
-                                total_height += height;
-                                total_width += width;
-                                count++;
-                                if ("text" in obj) {
-                                    const { text } = obj;
+                        const context_window = this.settings.context_window;
+
+                        for (const obj of selection) {
+                            const { x, y, height, width } = obj;
+                            total_x += x;
+                            total_y += y;
+                            total_height += height;
+                            total_width += width;
+                            count++;
+                            if ("text" in obj) {
+                                const { text } = obj;
+                                const text_token_length = this.encoder.encode(text).length;
+                                if (convo_total_tokens + text_token_length < context_window) {
+                                    all_text += text + "\n";
+                                    convo_total_tokens += text_token_length;
+                                } else {
+                                    new Notice("Context window exceeded");
+                                    break;
+                                }
+                            } else if ("filePath" in obj) {
+                                let { filePath } = obj;
+                                const file = await this.app.vault.getFileByPath(filePath);
+                                if (!file) {
+                                    console.error("Not a file at this file path");
+                                    continue;
+                                }
+                                if (file.extension === "pdf") {
+                                    const text = await this.extractTextFromPDF(file.name);
                                     const text_token_length = this.encoder.encode(text).length;
-                                    if (convo_total_tokens + text_token_length < context_window) {
-                                        all_text += text + "\n";
-                                        convo_total_tokens += text_token_length;
-                                    } else {
+                                    if (convo_total_tokens + text_token_length > context_window) {
                                         new Notice("Context window exceeded");
                                         break;
                                     }
-                                } else if ("filePath" in obj) {
-                                    let { filePath } = obj;
-                                    const file = await this.app.vault.getFileByPath(filePath);
-                                    if (!file) {
-                                        console.error("Not a file at this file path");
-                                        continue;
+                                    const file_text = `PDF Title: ${file.name}`;
+                                    all_text += `${file_text} \n ${text}`;
+                                    convo_total_tokens += text_token_length;
+                                } else if (file?.extension === "md") {
+                                    const text = await this.app.vault.read(file);
+                                    const text_token_length = this.encoder.encode(text).length;
+                                    if (convo_total_tokens + text_token_length > context_window) {
+                                        new Notice("Context window exceeded");
+                                        break;
                                     }
-                                    if (file.extension === "pdf") {
-                                        const text = await this.extractTextFromPDF(file.name);
-                                        const text_token_length = this.encoder.encode(text).length;
-                                        if (convo_total_tokens + text_token_length > context_window) {
-                                            new Notice("Context window exceeded");
-                                            break;
-                                        }
-                                        const file_text = `PDF Title: ${file.name}`;
-                                        all_text += `${file_text} \n ${text}`;
-                                        convo_total_tokens += text_token_length;
-                                    } else if (file?.extension === "md") {
-                                        const text = await this.app.vault.read(file);
-                                        const text_token_length = this.encoder.encode(text).length;
-                                        if (convo_total_tokens + text_token_length > context_window) {
-                                            new Notice("Context window exceeded");
-                                            break;
-                                        }
-                                        const file_text = `
+                                    const file_text = `
                                 Title: ${filePath.replace(".md", "")}
                                 ${text}
                                 `.trim();
-                                        all_text += file_text;
-                                        convo_total_tokens += text_token_length;
-                                    }
+                                    all_text += file_text;
+                                    convo_total_tokens += text_token_length;
                                 }
                             }
+                        }
 
-                            average_x = count > 0 ? total_x / count : 0;
-                            average_y = count > 0 ? total_y / count : 0;
-                            average_height = count > 0 ? Math.max(200, total_height / count) : 200;
-                            average_width = count > 0 ? Math.max(200, total_width / count) : 200;
+                        average_x = count > 0 ? total_x / count : 0;
+                        average_y = count > 0 ? total_y / count : 0;
+                        average_height = count > 0 ? Math.max(200, total_height / count) : 200;
+                        average_width = count > 0 ? Math.max(200, total_width / count) : 200;
 
-                            // This handles the model ---
-                            // Create a modal with a text input and a submit button
-                            const modal = new Modal(this.app);
-                            modal.contentEl.createEl("h1", { text: "Canvas prompt" });
-                            const container = modal.contentEl.createDiv({ cls: "caret-flex-col" });
-                            const text_area = container.createEl("textarea", {
-                                placeholder: "",
-                                cls: "caret-w-full caret-mb-2",
-                            });
-                            const submit_button = container.createEl("button", { text: "Submit" });
-                            submit_button.onclick = async () => {
-                                modal.close();
-                                const prompt = `
+                        // This handles the model ---
+                        // Create a modal with a text input and a submit button
+                        const modal = new Modal(this.app);
+                        modal.contentEl.createEl("h1", { text: "Canvas prompt" });
+                        const container = modal.contentEl.createDiv({ cls: "caret-flex-col" });
+                        const text_area = container.createEl("textarea", {
+                            placeholder: "",
+                            cls: "caret-w-full caret-mb-2",
+                        });
+                        const submit_button = container.createEl("button", { text: "Submit" });
+                        submit_button.onclick = async () => {
+                            modal.close();
+                            const prompt = `
                         Please do the following:
                         ${text_area.value}
 
                         Given this content:
                         ${all_text}
                         `;
-                                const conversation: Message[] = [{ role: "user", content: prompt }];
-                                // Create the text node on the canvas
-                                const text_node_config = {
-                                    pos: { x: average_x + 50, y: average_y }, // Position on the canvas
-                                    size: { width: average_width, height: average_height }, // Size of the text box
-                                    position: "center", // This might relate to text alignment
-                                    text: "", // Text content from input
-                                    save: true, // Save this node's state
-                                    focus: true, // Focus and start editing immediately
-                                };
-                                const node = canvas.createTextNode(text_node_config);
-                                const node_id = node.id;
-
-                                if (
-                                    this.settings.llm_provider_options[this.settings.llm_provider][this.settings.model]
-                                        .streaming
-                                ) {
-                                    const stream: Message = await this.llm_call_streaming(
-                                        this.settings.llm_provider,
-                                        this.settings.model,
-                                        conversation,
-                                        1
-                                    );
-
-                                    await this.update_node_content(node_id, stream, this.settings.llm_provider);
-                                } else {
-                                    const content = await this.llm_call(
-                                        this.settings.llm_provider,
-                                        this.settings.model,
-                                        conversation
-                                    );
-                                    node.setText(content);
-                                }
+                            const conversation: Message[] = [{ role: "user", content: prompt }];
+                            // Create the text node on the canvas
+                            const text_node_config = {
+                                pos: { x: average_x + 50, y: average_y }, // Position on the canvas
+                                size: { width: average_width, height: average_height }, // Size of the text box
+                                position: "center", // This might relate to text alignment
+                                text: "", // Text content from input
+                                save: true, // Save this node's state
+                                focus: true, // Focus and start editing immediately
                             };
+                            const node = canvas.createTextNode(text_node_config);
+                            const node_id = node.id;
 
-                            modal.open();
-                        })();
+                            if (
+                                this.settings.llm_provider_options[this.settings.llm_provider][this.settings.model]
+                                    .streaming
+                            ) {
+                                const stream: Message = await this.llm_call_streaming(
+                                    this.settings.llm_provider,
+                                    this.settings.model,
+                                    conversation,
+                                    1
+                                );
+
+                                await this.update_node_content(node_id, stream, this.settings.llm_provider);
+                            } else {
+                                const content = await this.llm_call(
+                                    this.settings.llm_provider,
+                                    this.settings.model,
+                                    conversation
+                                );
+                                node.setText(content);
+                            }
+                        };
+
+                        modal.open();
                     }
 
                     return true;
@@ -771,7 +716,7 @@ version: 1
         this.addCommand({
             id: "inline-editing",
             name: "Inline editing",
-            checkCallback: (checking: boolean) => {
+            checkCallback: async (checking: boolean) => {
                 const activeView = this.app.workspace.getActiveViewOfType(MarkdownView);
                 if (activeView && activeView.editor) {
                     const selectedText = activeView.editor.getSelection();
@@ -792,7 +737,7 @@ version: 1
         this.addCommand({
             id: "edit-workflow",
             name: "Edit workflow",
-            checkCallback: (checking: boolean) => {
+            checkCallback: async (checking: boolean) => {
                 const editor = this.app.workspace.getActiveViewOfType(MarkdownView)?.editor;
                 if (editor) {
                     if (!checking) {
@@ -819,7 +764,7 @@ version: 1
         this.addCommand({
             id: "apply-inline-changes",
             name: "Apply inline changes",
-            checkCallback: (checking: boolean) => {
+            checkCallback: async (checking: boolean) => {
                 const editor = this.app.workspace.getActiveViewOfType(MarkdownView)?.editor;
 
                 if (editor) {
@@ -940,6 +885,14 @@ version: 1
         // Currently not using the sidebar chat.
         // this.registerView(VIEW_NAME_SIDEBAR_CHAT, (leaf) => new SidebarChat(leaf));
         this.registerView(VIEW_CHAT, (leaf) => new FullPageChat(this, leaf));
+
+        this.addCommand({
+            id: "refresh-ollama-models",
+            name: "Refresh Ollama Models",
+            callback: async () => {
+                await this.updateOllamaModels();
+            }
+        });
     }
 
     // General functions that the plugin uses
@@ -1330,7 +1283,7 @@ version: 1
             console.error("Edit button not found");
         }
     }
-    runGraphChat(canvas: Canvas) {
+    async runGraphChat(canvas: Canvas) {
         canvas.requestSave();
         const selection = canvas.selection;
         const selectionIterator = selection.values();
@@ -1346,7 +1299,7 @@ version: 1
             console.error("Edit button not found");
         }
     }
-    navigate(canvas: Canvas, direction: string) {
+    async navigate(canvas: Canvas, direction: string) {
         // const canvas = canvasView.canvas;
         const selection = canvas.selection;
         const selectionIterator = selection.values();
@@ -1359,68 +1312,39 @@ version: 1
         }
         const node_id = node.id;
         const canvas_data = canvas.getData();
+        const { edges, nodes } = canvas_data;
+        const longest_lineage = await CaretPlugin.getLongestLineage(nodes, edges, node.id);
 
-        // Assuming direction can be 'next' or 'previous' for simplicity
-        const edges = canvas_data.edges;
-        const nodes = canvas_data.nodes;
-        let targetNodeID: string | null = null;
+        // Create a set to track lineage node IDs for comparison
+        const lineage_node_ids = new Set(longest_lineage.map((node) => node.id));
 
-        switch (direction) {
-            case "right":
-                // Handle both 'from' and 'to' cases for 'right'
-                const edgeRightFrom = edges.find(
-                    (edge: Edge) => edge.fromNode === node_id && edge.fromSide === "right"
-                );
-                if (edgeRightFrom) {
-                    targetNodeID = edgeRightFrom.toNode;
-                } else {
-                    const edgeRightTo = edges.find((edge: Edge) => edge.toNode === node_id && edge.toSide === "right");
-                    if (edgeRightTo) {
-                        targetNodeID = edgeRightTo.fromNode;
-                    }
-                }
-                break;
-            case "left":
-                // Handle both 'from' and 'to' cases for 'left'
-                const edgeLeftFrom = edges.find((edge: Edge) => edge.fromNode === node_id && edge.fromSide === "left");
-                if (edgeLeftFrom) {
-                    targetNodeID = edgeLeftFrom.toNode;
-                } else {
-                    const edgeLeftTo = edges.find((edge: Edge) => edge.toNode === node_id && edge.toSide === "left");
-                    if (edgeLeftTo) {
-                        targetNodeID = edgeLeftTo.fromNode;
-                    }
-                }
-                break;
-            case "top":
-                // Handle both 'from' and 'to' cases for 'top'
-                const edgeTopFrom = edges.find((edge: Edge) => edge.fromNode === node_id && edge.fromSide === "top");
-                if (edgeTopFrom) {
-                    targetNodeID = edgeTopFrom.toNode;
-                } else {
-                    const edgeTopTo = edges.find((edge: Edge) => edge.toNode === node_id && edge.toSide === "top");
-                    if (edgeTopTo) {
-                        targetNodeID = edgeTopTo.fromNode;
-                    }
-                }
-                break;
-            case "bottom":
-                // Handle both 'from' and 'to' cases for 'bottom'
-                const edgeBottomFrom = edges.find(
-                    (edge: Edge) => edge.fromNode === node_id && edge.fromSide === "bottom"
-                );
-                if (edgeBottomFrom) {
-                    targetNodeID = edgeBottomFrom.toNode;
-                } else {
-                    const edgeBottomTo = edges.find(
-                        (edge: Edge) => edge.toNode === node_id && edge.toSide === "bottom"
-                    );
-                    if (edgeBottomTo) {
-                        targetNodeID = edgeBottomTo.fromNode;
-                    }
-                }
-                break;
+        // Iterate through all nodes in the longest lineage
+        for (const lineage_node of longest_lineage) {
+            const lineage_id = lineage_node.id;
+            const lineage_color = lineage_node.color;
+            // Only store and change the color if it's not already stored
+            if (!this.selected_node_colors.hasOwnProperty(lineage_id)) {
+                this.selected_node_colors[lineage_id] = lineage_color; // Store the current color with node's id as key
+                const filtered_nodes = nodes.filter((node: Node) => node.id === lineage_id);
+                filtered_nodes.forEach((node: Node) => {
+                    node.color = "4"; // Reset the node color to its original
+                    node.render(); // Re-render the node to apply the color change
+                });
+            }
         }
+
+        // Reset and remove nodes not in the current lineage
+        Object.keys(this.selected_node_colors).forEach((node_id) => {
+            if (!lineage_node_ids.has(node_id)) {
+                const original_color = this.selected_node_colors[node_id];
+                const filtered_nodes = nodes.filter((node: Node) => node.id === node_id);
+                filtered_nodes.forEach((node: Node) => {
+                    node.color = original_color; // Reset the node color to its original
+                    node.render(); // Re-render the node to apply the color change
+                });
+                delete this.selected_node_colors[node_id]; // Remove from tracking object
+            }
+        });
         // const viewportNodes = canvas.getViewportNodes();
         let viewport_nodes: ViewportNode[] = [];
         let initial_viewport_children = canvas.nodeIndex.data.children;
@@ -1448,14 +1372,111 @@ version: 1
             }
         }
 
-        if (targetNodeID) {
-            const target_node = viewport_nodes.find((node) => node.id === targetNodeID);
-            if (target_node) {
-                // TODO - Figure out the proper way to do this and abstract it out so it's easier to get viewport children
-                // @ts-ignore
-                canvas.selectOnly(target_node);
-                // @ts-ignore
-                canvas.zoomToSelection(target_node);
+        if (direction === "right") {
+            // Handle both 'from' and 'to' cases for 'right'
+            const edgeRightFrom = edges.find(
+                (edge: Edge) => edge.fromNode === node_id && edge.fromSide === "right"
+            );
+            if (edgeRightFrom) {
+                const targetNodeID = edgeRightFrom.toNode;
+                const target_node = viewport_nodes.find((node) => node.id === targetNodeID);
+                if (target_node) {
+                    // @ts-ignore
+                    canvas.selectOnly(target_node);
+                    // @ts-ignore
+                    canvas.zoomToSelection(target_node);
+                }
+            } else {
+                const edgeRightTo = edges.find((edge: Edge) => edge.toNode === node_id && edge.toSide === "right");
+                if (edgeRightTo) {
+                    const targetNodeID = edgeRightTo.fromNode;
+                    const target_node = viewport_nodes.find((node) => node.id === targetNodeID);
+                    if (target_node) {
+                        // @ts-ignore
+                        canvas.selectOnly(target_node);
+                        // @ts-ignore
+                        canvas.zoomToSelection(target_node);
+                    }
+                }
+            }
+        } else if (direction === "left") {
+            // Handle both 'from' and 'to' cases for 'left'
+            const edgeLeftFrom = edges.find((edge: Edge) => edge.fromNode === node_id && edge.fromSide === "left");
+            if (edgeLeftFrom) {
+                const targetNodeID = edgeLeftFrom.toNode;
+                const target_node = viewport_nodes.find((node) => node.id === targetNodeID);
+                if (target_node) {
+                    // @ts-ignore
+                    canvas.selectOnly(target_node);
+                    // @ts-ignore
+                    canvas.zoomToSelection(target_node);
+                }
+            } else {
+                const edgeLeftTo = edges.find((edge: Edge) => edge.toNode === node_id && edge.toSide === "left");
+                if (edgeLeftTo) {
+                    const targetNodeID = edgeLeftTo.fromNode;
+                    const target_node = viewport_nodes.find((node) => node.id === targetNodeID);
+                    if (target_node) {
+                        // @ts-ignore
+                        canvas.selectOnly(target_node);
+                        // @ts-ignore
+                        canvas.zoomToSelection(target_node);
+                    }
+                }
+            }
+        } else if (direction === "top") {
+            // Handle both 'from' and 'to' cases for 'top'
+            const edgeTopFrom = edges.find((edge: Edge) => edge.fromNode === node_id && edge.fromSide === "top");
+            if (edgeTopFrom) {
+                const targetNodeID = edgeTopFrom.toNode;
+                const target_node = viewport_nodes.find((node) => node.id === targetNodeID);
+                if (target_node) {
+                    // @ts-ignore
+                    canvas.selectOnly(target_node);
+                    // @ts-ignore
+                    canvas.zoomToSelection(target_node);
+                }
+            } else {
+                const edgeTopTo = edges.find((edge: Edge) => edge.toNode === node_id && edge.toSide === "top");
+                if (edgeTopTo) {
+                    const targetNodeID = edgeTopTo.fromNode;
+                    const target_node = viewport_nodes.find((node) => node.id === targetNodeID);
+                    if (target_node) {
+                        // @ts-ignore
+                        canvas.selectOnly(target_node);
+                        // @ts-ignore
+                        canvas.zoomToSelection(target_node);
+                    }
+                }
+            }
+        } else if (direction === "bottom") {
+            // Handle both 'from' and 'to' cases for 'bottom'
+            const edgeBottomFrom = edges.find(
+                (edge: Edge) => edge.fromNode === node_id && edge.fromSide === "bottom"
+            );
+            if (edgeBottomFrom) {
+                const targetNodeID = edgeBottomFrom.toNode;
+                const target_node = viewport_nodes.find((node) => node.id === targetNodeID);
+                if (target_node) {
+                    // @ts-ignore
+                    canvas.selectOnly(target_node);
+                    // @ts-ignore
+                    canvas.zoomToSelection(target_node);
+                }
+            } else {
+                const edgeBottomTo = edges.find(
+                    (edge: Edge) => edge.toNode === node_id && edge.toSide === "bottom"
+                );
+                if (edgeBottomTo) {
+                    const targetNodeID = edgeBottomTo.fromNode;
+                    const target_node = viewport_nodes.find((node) => node.id === targetNodeID);
+                    if (target_node) {
+                        // @ts-ignore
+                        canvas.selectOnly(target_node);
+                        // @ts-ignore
+                        canvas.zoomToSelection(target_node);
+                    }
+                }
             }
         }
         this.highlightLineage();
@@ -1689,6 +1710,7 @@ version: 1
                                 this.settings.model,
                                 [llm_prompt]
                             );
+
                             const new_node = await this.createChildNode(
                                 canvas,
                                 node,
@@ -1913,10 +1935,10 @@ version: 1
         return longestLineage;
     }
     async getDirectAncestorsWithContext(nodes: Node[], edges: Edge[], nodeId: string): Promise<string> {
-        let direct_ancentors_context = "";
+        let direct_ancentors_context = ``;
 
         const startNode = nodes.find((node) => node.id === nodeId);
-        if (!startNode) return "";
+        if (!startNode) return ``;
 
         const incomingEdges: Edge[] = edges.filter((edge) => edge.toNode === nodeId);
         for (let i = 0; i < incomingEdges.length; i++) {
@@ -1950,7 +1972,7 @@ version: 1
                 const edge = incomingEdges[i];
                 const ancestor = nodes.find((node) => node.id === edge.fromNode);
                 if (ancestor) {
-                    let contextToAdd = "";
+                    let contextToAdd = ``;
 
                     if (ancestor.type === "text") {
                         // @ts-ignore
@@ -1959,7 +1981,7 @@ version: 1
                             let ancestor_text = ancestor.text;
                             if (this.settings.include_nested_block_refs) {
                                 const block_ref_content = await this.getRefBlocksContent(ancestor_text);
-                                ancestor_text += block_ref_content;
+                                ancestor_text += `\n${block_ref_content}`;
                             }
                             contextToAdd += ancestor_text;
                         }
@@ -2003,7 +2025,7 @@ version: 1
 
     async getRefBlocksContent(node_text: any): Promise<string> {
         const bracket_regex = /\[\[(.*?)\]\]/g;
-        let rep_block_content = "";
+        let rep_block_content = ``;
 
         let match;
         const matches = [];
@@ -2127,195 +2149,45 @@ version: 1
         yOffset: number = 0
     ) {
         let local_system_prompt = system_prompt;
-        const canvas_view = this.app.workspace.getMostRecentLeaf()?.view;
-        // @ts-ignore
-        if (!canvas_view || !canvas_view.canvas) {
-            return;
-        }
-        // @ts-ignore
-        const canvas = canvas_view.canvas;
+        const caret_canvas = CaretCanvas.fromPlugin(this);
+        const refreshed_node = caret_canvas.getNode(node_id);
 
-        let node = await this.getCurrentNode(canvas, node_id);
-        if (!node) {
-            console.error("Node not found with ID:", node_id);
-            return;
-        }
-
-        node.unknownData.role = "user";
-
-        const canvas_data = canvas.getData();
-        const { edges, nodes } = canvas_data;
-
-        // Continue with operations on `target_node`
-        if (node.hasOwnProperty("file")) {
-            const file_path = node.file.path;
-            const file = this.app.vault.getAbstractFileByPath(file_path);
-            if (file) {
-                // @ts-ignore
-                const text = await this.app.vault.cachedRead(file);
-
-                // Check for the presence of three dashes indicating the start of the front matter
-                const front_matter = await this.getFrontmatter(file);
-                if (front_matter.hasOwnProperty("caret_prompt")) {
-                    let caret_prompt = front_matter.caret_prompt;
-
-                    if (caret_prompt === "parallel" && text) {
-                        const matchResult = text.match(/```xml([\s\S]*?)```/);
-                        if (!matchResult) {
-                            new Notice("Incorrectly formatted parallel workflow.");
-                            return;
-                        }
-                        const xml_content = matchResult[1].trim();
-                        const xml = await this.parseXml(xml_content);
-                        const system_prompt_list = xml.root.system_prompt;
-
-                        let system_prompt = "";
-                        if (system_prompt_list[0]._) {
-                            system_prompt = system_prompt_list[0]._.trim;
-                        }
-
-                        const prompts = xml.root.prompt;
-                        const card_height = node.height;
-                        const middle_index = Math.floor(prompts.length / 2);
-                        const highest_y = node.y - middle_index * (100 + card_height); // Calculate the highest y based on the middle index
-                        const sparkle_promises = [];
-
-                        for (let i = 0; i < prompts.length; i++) {
-                            const prompt = prompts[i];
-
-                            const prompt_content = prompt._.trim();
-                            const prompt_delay = prompt.$?.delay || 0;
-                            const prompt_model = prompt.$?.model || "default";
-                            const prompt_provider = prompt.$?.provider || "default";
-                            const prompt_temperature = parseFloat(prompt.$?.temperature) || this.settings.temperature;
-                            const new_node_content = `${prompt_content}`;
-                            const x = node.x + node.width + 200;
-                            const y = highest_y + i * (100 + card_height); // Increment y for each prompt to distribute them vertically including card height
-
-                            // Create a new user node
-                            const user_node = await this.createChildNode(
-                                canvas,
-                                node,
-                                x,
-                                y,
-                                new_node_content,
-                                "right",
-                                "left"
-                            );
-                            const model_context_window =
-                                this.settings.llm_provider_options[prompt_provider]?.[prompt_model]?.context_window ||
-                                this.settings.context_window;
-                            user_node.unknownData.role = "user";
-                            user_node.unknownData.displayOverride = false;
-
-                            const sparkle_config: SparkleConfig = {
-                                model: prompt_model,
-                                provider: prompt_provider,
-                                temperature: prompt_temperature,
-                                context_window: model_context_window,
-                            };
-
-                            const sparkle_promise = (async () => {
-                                if (prompt_delay > 0) {
-                                    new Notice(`Waiting for ${prompt_delay} seconds...`);
-                                    await new Promise((resolve) => setTimeout(resolve, prompt_delay * 1000));
-                                    new Notice(`Done waiting for ${prompt_delay} seconds.`);
-                                }
-                                await this.sparkle(user_node.id, system_prompt, sparkle_config);
-                            })();
-
-                            sparkle_promises.push(sparkle_promise);
-                        }
-
-                        await Promise.all(sparkle_promises);
-                        return;
-                    } else if (caret_prompt === "linear") {
-                        const matchResult = text.match(/```xml([\s\S]*?)```/);
-                        if (!matchResult) {
-                            new Notice("Incorrectly formatted linear workflow.");
-                            return;
-                        }
-                        const xml_content = matchResult[1].trim();
-                        const xml = await this.parseXml(xml_content);
-                        const system_prompt_list = xml.root.system_prompt;
-                        let system_prompt;
-                        if (system_prompt_list[0]._) {
-                            system_prompt = system_prompt_list[0]._.trim();
-                        }
-
-                        const prompts = xml.root.prompt;
-
-                        let current_node = node;
-                        for (let i = 0; i < prompts.length; i++) {
-                            const prompt = prompts[i];
-                            const prompt_content = prompt._.trim();
-                            const prompt_delay = prompt.$?.delay || 0;
-                            const prompt_model = prompt.$?.model || "default";
-                            const prompt_provider = prompt.$?.provider || "default";
-                            const prompt_temperature = parseFloat(prompt.$?.temperature) || this.settings.temperature;
-                            const new_node_content = `${prompt_content}`;
-                            const x = current_node.x + current_node.width + 200;
-                            const y = current_node.y;
-
-                            // Create a new user node
-                            const user_node = await this.createChildNode(
-                                canvas,
-                                current_node,
-                                x,
-                                y,
-                                new_node_content,
-                                "right",
-                                "left"
-                            );
-                            const model_context_window =
-                                this.settings.llm_provider_options[prompt_provider]?.[prompt_model]?.context_window ||
-                                this.settings.context_window;
-                            user_node.unknownData.role = "user";
-                            user_node.unknownData.displayOverride = false;
-                            const sparkle_config: SparkleConfig = {
-                                model: prompt_model,
-                                provider: prompt_provider,
-                                temperature: prompt_temperature,
-                                context_window: model_context_window,
-                            };
-                            if (prompt_delay > 0) {
-                                new Notice(`Waiting for ${prompt_delay} seconds...`);
-                                await new Promise((resolve) => setTimeout(resolve, prompt_delay * 1000));
-                                new Notice(`Done waiting for ${prompt_delay} seconds.`);
-                            }
-                            const assistant_node = await this.sparkle(user_node.id, system_prompt, sparkle_config);
-                            current_node = assistant_node;
-                        }
-                    } else {
-                        new Notice("Invalid Caret prompt");
-                    }
-
-                    return;
-                }
-            } else {
-                console.error("File not found or is not a readable file:", file_path);
-            }
-        }
-        let context_window = sparkle_config.context_window;
-        if (sparkle_config.context_window === "default") {
-            context_window = this.settings.context_window;
+        const longest_lineage = refreshed_node.getLongestLineage();
+        const parent_node = longest_lineage[1];
+        let context_window: string | number = this.settings.context_window;
+        if (sparkle_config.context_window !== "default") {
+            context_window = sparkle_config.context_window;
         }
         if (typeof context_window !== "number" || isNaN(context_window)) {
             throw new Error("Invalid context window: must be a number");
         }
 
-        const { conversation } = await this.buildConversation(node, nodes, edges, local_system_prompt, context_window);
+        const { conversation } = await this.buildConversation(
+            parent_node,
+            caret_canvas.nodes,
+            caret_canvas.edges,
+            system_prompt,
+            context_window
+        );
         const { model, provider, temperature } = this.mergeSettingsAndSparkleConfig(sparkle_config);
 
         const node_content = ``;
-        let x = node.x + node.width + xOffset;
-        let y = node.y + yOffset;
+        let x = parent_node.x + parent_node.width + xOffset;
+        let y = parent_node.y + yOffset;
         // This is needed to work with the iterations. We still need to return the first node from the iterations
         // So linear workflows works
         let firstNode = null;
 
         for (let i = 0; i < iterations; i++) {
-            const new_node = await this.createChildNode(canvas, node, x, y, node_content, "right", "left");
+            const new_node = await this.createChildNode(
+                caret_canvas.canvas,
+                parent_node,
+                x,
+                y,
+                node_content,
+                "right",
+                "left"
+            );
             if (!new_node) {
                 throw new Error("Invalid new node");
             }
@@ -2323,7 +2195,7 @@ version: 1
             if (!new_node_id) {
                 throw new Error("Invalid node id");
             }
-            const new_canvas_node = await this.get_node_by_id(canvas, new_node_id);
+            const new_canvas_node = await this.get_node_by_id(caret_canvas.canvas, new_node_id);
             new_canvas_node.initialize();
             if (!new_canvas_node.unknownData.hasOwnProperty("role")) {
                 new_canvas_node.unknownData.role = "";
@@ -2347,7 +2219,7 @@ version: 1
                 firstNode = new_canvas_node;
             }
 
-            y += yOffset + node.height;
+            y += yOffset + parent_node.height;
         }
         return firstNode;
     }
@@ -2366,9 +2238,7 @@ version: 1
             let node_context = await this.getAssociatedNodeContent(node, nodes, edges);
             if (this.settings.include_nested_block_refs) {
                 const block_ref_content = await this.getRefBlocksContent(node_context);
-                if (block_ref_content.length > 0) {
-                    node_context += `\n${block_ref_content}`;
-                }
+                node_context += `\n${block_ref_content}`;
             }
             if (node_context.length > 0) {
                 node_context += `\n${node_context}`;
@@ -2472,6 +2342,7 @@ version: 1
             context_window: "default",
         }
     ) {
+        let local_system_prompt = system_prompt;
         const caret_canvas = CaretCanvas.fromPlugin(this);
         const refreshed_node = caret_canvas.getNode(refreshed_node_id);
 
@@ -2529,7 +2400,7 @@ version: 1
             llm_provider === "openrouter"
         ) {
             for await (const part of stream) {
-                const delta_content = part.choices[0]?.delta.content || "";
+                const delta_content = part.choices[0]?.delta.content || ``;
 
                 const current_text = node.text;
                 const new_content = `${current_text}${delta_content}`;
@@ -2979,32 +2850,6 @@ version: 1
         return hexArray.join("");
     }
 
-    addEdgeToCanvas(canvas: any, edgeID: string, fromEdge: any, toEdge: any) {
-        if (!canvas) {
-            return;
-        }
-
-        const data = canvas.getData();
-        if (!data) {
-            return;
-        }
-
-        canvas.importData({
-            edges: [
-                ...data.edges,
-                {
-                    id: edgeID,
-                    fromNode: fromEdge.node.id,
-                    fromSide: fromEdge.side,
-                    toNode: toEdge.node.id,
-                    toSide: toEdge.side,
-                },
-            ],
-            nodes: data.nodes,
-        });
-        canvas.requestFrame();
-    }
-
     addChatIconToRibbon() {
         this.addRibbonIcon("message-square", "Caret Chat", async (evt) => {
             await this.app.workspace.getLeaf(true).setViewState({
@@ -3030,5 +2875,115 @@ version: 1
 
     async saveSettings() {
         await this.saveData(this.settings);
+    }
+
+    async fetchOllamaModels(): Promise<string[]> {
+        try {
+            console.log("Attempting to fetch Ollama models...");
+            
+            // First check if Ollama is running
+            try {
+                const healthCheck = await requestUrl({
+                    url: 'http://localhost:11434/',
+                    method: 'GET',
+                    throw: false
+                });
+                console.log("Ollama health check response:", healthCheck);
+            } catch (error) {
+                console.error("Ollama health check failed:", error);
+                throw new Error("Could not connect to Ollama. Is it running?");
+            }
+
+            // Fetch models
+            const response = await requestUrl({
+                url: 'http://localhost:11434/api/tags',
+                method: 'GET',
+                headers: {
+                    'Accept': 'application/json'
+                }
+            });
+
+            console.log("Ollama API response:", response);
+
+            if (response.status !== 200) {
+                console.error("Error response from Ollama:", await response.text);
+                throw new Error(`Ollama API returned status ${response.status}`);
+            }
+
+            try {
+                const data = response.json;
+                console.log("Parsed response data:", data);
+
+                if (!data || !data.models) {
+                    throw new Error('Invalid response format from Ollama API');
+                }
+
+                const models = data.models;
+                console.log("Found Ollama models:", models);
+
+                if (!Array.isArray(models)) {
+                    throw new Error('Models is not an array');
+                }
+
+                // Map model objects to just their names
+                const modelNames = models.map((model: any) => {
+                    // Handle both possible formats: {name: "model"} or just "model"
+                    return typeof model === 'object' ? model.name : model;
+                }).filter(Boolean); // Remove any undefined/null values
+
+                console.log("Extracted model names:", modelNames);
+                return modelNames;
+            } catch (parseError) {
+                console.error("Error parsing response:", parseError);
+                throw parseError;
+            }
+        } catch (error) {
+            console.error("Detailed error fetching Ollama models:", {
+                error,
+                message: error.message,
+                stack: error.stack
+            });
+            throw error; // Let the caller handle the error
+        }
+    }
+
+    async updateOllamaModels() {
+        try {
+            console.log("Starting Ollama models update...");
+            const models = await this.fetchOllamaModels();
+            console.log("Fetched models:", models);
+            
+            if (models.length > 0) {
+                // Initialize ollama provider options if not exists
+                if (!this.settings.llm_provider_options.ollama) {
+                    this.settings.llm_provider_options.ollama = {};
+                }
+
+                // Add each model to the provider options
+                for (const modelName of models) {
+                    this.settings.llm_provider_options.ollama[modelName] = {
+                        name: modelName,
+                        context_window: 8192,
+                        function_calling: false,
+                        vision: false,
+                        streaming: true
+                    };
+                }
+
+                console.log("Updated Ollama provider options:", this.settings.llm_provider_options.ollama);
+                await this.saveSettings();
+
+                if (this.settingsTab) {
+                    this.settingsTab.display();
+                }
+
+                new Notice(`Found ${models.length} Ollama models`);
+            } else {
+                throw new Error("No Ollama models found. Have you installed any models?");
+            }
+        } catch (error) {
+            console.error("Error updating Ollama models:", error);
+            throw error;
+        }
     }
 }

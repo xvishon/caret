@@ -112,7 +112,32 @@ export class CaretSettingTab extends PluginSettingTab {
                         this.display();
                     });
             });
-        const setting = new Setting(containerEl).setName("Model").addDropdown((modelDropdown) => {
+        const setting = new Setting(containerEl).setName("Model").addExtraButton(button => {
+            if (this.plugin.settings.llm_provider === "ollama") {
+                button
+                    .setIcon("refresh-ccw")
+                    .setTooltip("Refresh Ollama Models")
+                    .onClick(async () => {
+                        try {
+                            new Notice("Checking Ollama connection...");
+                            await this.plugin.updateOllamaModels();
+                            this.display();
+                        } catch (error) {
+                            console.error("Failed to refresh Ollama models:", error);
+                            
+                            // Show a more detailed error message
+                            const errorMessage = error.message.includes("Could not connect to Ollama")
+                                ? "Could not connect to Ollama. Please make sure:\n1. Ollama is running\n2. CORS is enabled with:\nOLLAMA_ORIGINS=app://obsidian.md* ollama serve"
+                                : error.message.includes("No Ollama models found")
+                                ? "No Ollama models found. Install models using:\nollama pull mistral"
+                                : `Error: ${error.message}`;
+                            
+                            new Notice(errorMessage, 10000);
+                        }
+                    });
+            }
+        });
+        setting.addDropdown((modelDropdown) => {
             modelDropdown.addOptions(model_options_data);
             modelDropdown.setValue(this.plugin.settings.model);
             modelDropdown.onChange(async (value) => {
